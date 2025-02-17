@@ -1,0 +1,31 @@
+{
+    "name": "lexo/laravel-log-monitor",
+    "version": "1.0.0",
+    "description": "Get notifications upon writing the Log messages.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "LEXO GmbH",
+            "email": "websupport@lexo.ch",
+            "homepage": "https://www.lexo.ch"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "LEXO\\LaravelLogMonitor\\": "src/"
+        }
+    },
+    "require": {
+        "php": "^8.0.2",
+        "illuminate/support": "^10.0|^11.0"
+    },
+    "prefer-stable": true,
+    "extra": {
+        "laravel": {
+            "providers": [
+                "LEXO\\LaravelLogMonitor\\Providers\\LaravelLogMonitorServiceProvider"
+            ]
+        }
+    }
+}
