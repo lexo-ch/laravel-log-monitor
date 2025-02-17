@@ -1,5 +1,6 @@
 {
     "private": true,
+    "name": "lexo-laravel-log-monitor",
     "devDependencies": {
         "@semantic-release/changelog": "^6.0.3",
         "@semantic-release/exec": "^7.0.3",
