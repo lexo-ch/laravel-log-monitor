@@ -11,6 +11,7 @@ class LaravelLogMonitorService
 {
     protected array $config;
     protected array $context;
+    protected array $llmContext;
     protected array $filtered_context = [];
     protected ?string $priority = null;
 
@@ -39,20 +40,19 @@ class LaravelLogMonitorService
         }
 
         $this->context = $event->context ?? [];
+        $this->llmContext = $this->context['llm'] ?? [];
 
         $level = strtolower($event->level);
         
-        if (!($level === 'error' || (isset($this->context['alert']) && $this->context['alert'] === true))) {
+        if (!($level === 'error' || (isset($this->llmContext['alert']) && $this->llmContext['alert'] === true))) {
             return;
         }
 
-        if (!empty($this->context)) {
+        if (!empty($this->llmContext)) {
             $this->priority = $this->extractPriorityFromContext();
         }
 
-        $this->filtered_context = $this->priority !== null
-            ? $this->filtered_context = $this->filterContext()
-            : $this->context;
+        $this->filtered_context = $this->filterContext();
 
         $this->sendToMattermost($event);
 
@@ -203,8 +203,8 @@ class LaravelLogMonitorService
     {
         $priority = null;
         
-        if (isset($this->context['priority']) && is_string($this->context['priority'])) {
-            $priorityValue = strtolower($this->context['priority']);
+        if (isset($this->llmContext['priority']) && is_string($this->llmContext['priority'])) {
+            $priorityValue = strtolower($this->llmContext['priority']);
             
             if (in_array($priorityValue, self::MATTERMOST_PRIORITY_VALUES)) {
                 $priority = $priorityValue;
@@ -216,15 +216,19 @@ class LaravelLogMonitorService
 
     protected function filterContext(): array
     {
-        $filteredContext = $this->context;
-        
-        unset($filteredContext['priority']);
-        unset($filteredContext['alert']);
-        
-        if (empty($filteredContext)) {
+        if (empty($this->context)) {
             return [];
         }
         
+        // Create a copy of the full context for filtering
+        $filteredContext = $this->context;
+        
+        // If llm data exists, we'll remove it after extracting what we need
+        if (isset($filteredContext['llm'])) {
+            unset($filteredContext['llm']);
+        }
+        
+        // Return the filtered context with any llm configuration removed
         return $filteredContext;
     }
 }
