@@ -14,11 +14,6 @@ class LaravelLogMonitorService
     protected array $filtered_context = [];
     protected ?string $priority = null;
 
-    public const ALLOWED_LEVELS = [
-        'error',
-        'info'
-    ];
-
     public const MATTERMOST_PRIORITY_VALUES = [
         'urgent',
         'important'
@@ -45,6 +40,12 @@ class LaravelLogMonitorService
 
         $this->context = $event->context ?? [];
 
+        $level = strtolower($event->level);
+        
+        if (!($level === 'error' || (isset($this->context['alert']) && $this->context['alert'] === true))) {
+            return;
+        }
+
         if (!empty($this->context)) {
             $this->priority = $this->extractPriorityFromContext();
         }
@@ -65,16 +66,6 @@ class LaravelLogMonitorService
         $emailConfig = $this->config['channels']['email'];
         
         if (!$emailConfig['enabled']) {
-            return;
-        }
-
-        $level = strtolower($event->level);
-
-        if (!in_array($level, self::ALLOWED_LEVELS)) {
-            return;
-        }
-
-        if (!($emailConfig['notification_levels'][$level] ?? false)) {
             return;
         }
 
@@ -106,31 +97,22 @@ class LaravelLogMonitorService
         if (!$mattermostConfig['enabled']) {
             return;
         }
-
-        $level = strtolower($event->level);
         
-        if (!in_array($level, self::ALLOWED_LEVELS)) {
-            return;
-        }
+        $channel_id = $mattermostConfig['channel_id'] ?? null;
 
-        $levelConfig = $mattermostConfig['notification_levels'][$level] ?? null;
-
-        if (!$levelConfig || !$levelConfig['enabled']) {
+        if (empty($channel_id)) {
             return;
         }
 
         $formatted_message = $this->formatMattermostMessage($event);
 
         $post_data = [
-            'channel_id' => $levelConfig['channel_id'],
+            'channel_id' => $channel_id,
             'props' => [
                 'attachments' => [
                     [
                         'title' => $formatted_message['title'],
-                        'color' => match ($level) {
-                            'error' => '#d24a4e',
-                            default => '#2183fc',
-                        },
+                        'color' => strtolower($event->level) === 'error' ? '#d24a4e' : '#2183fc',
                         'text' => $formatted_message['message'],
                         'footer' => config('app.name'),
                     ]
@@ -157,7 +139,7 @@ class LaravelLogMonitorService
             }
     
         } catch (\Exception $e) {
-            error_log("Failed to send to Mattermost channel {$levelConfig['channel_id']}: " . $e->getMessage());
+            error_log("Failed to send to Mattermost channel {$channel_id}: " . $e->getMessage());
 
             if ($this->config['channels']['email']['send_as_backup']) {
                 $this->sendEmailNotification($event);
@@ -199,12 +181,8 @@ class LaravelLogMonitorService
             if (empty($this->config['channels']['mattermost']['token'])) {
                 throw new \InvalidArgumentException('Mattermost token is required when Mattermost is enabled');
             }
-            
-            foreach (['error', 'warning'] as $level) {
-                if (($this->config['channels']['mattermost']['notification_levels'][$level]['enable'] ?? false) 
-                    && empty($this->config['channels']['mattermost']['notification_levels'][$level]['channel_id'])) {
-                    throw new \InvalidArgumentException("Mattermost channel_id is required for {$level} level when enabled");
-                }
+            if (empty($this->config['channels']['mattermost']['channel_id'])) {
+                throw new \InvalidArgumentException('Mattermost channel_id is required when Mattermost is enabled');
             }
         }
 
@@ -241,6 +219,7 @@ class LaravelLogMonitorService
         $filteredContext = $this->context;
         
         unset($filteredContext['priority']);
+        unset($filteredContext['alert']);
         
         if (empty($filteredContext)) {
             return [];

@@ -22,10 +22,10 @@
             border-radius: 3px;
             font-weight: bold;
             color: white;
-            background-color: #dc3545;  /* Default red for error */
-        }
-        .level.info {
             background-color: #2083fc;
+        }
+        .level.error {
+            background-color: #dc3545;
         }
         .datetime {
             color: #666;
