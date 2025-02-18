@@ -22,10 +22,10 @@
             border-radius: 3px;
             font-weight: bold;
             color: white;
-            background-color: #dc3545;  /* Default red for error */
-        }
-        .level.info {
             background-color: #2083fc;
+        }
+        .level.error {
+            background-color: #dc3545;
         }
         .datetime {
             color: #666;
@@ -89,9 +89,7 @@
 
         @if(!empty($emailData['context']))
             <h3>Context Details</h3>
-            <div class="context">
-                @json($emailData['context'], JSON_PRETTY_PRINT)
-            </div>
+            <div class="context">@json($emailData['context'])</div>
         @endif
 
         <div class="footer">

@@ -10,10 +10,14 @@ use LEXO\LaravelLogMonitor\Mail\Notification;
 class LaravelLogMonitorService
 {
     protected array $config;
+    protected array $context;
+    protected array $llmContext;
+    protected array $filtered_context = [];
+    protected ?string $priority = null;
 
-    public const ALLOWED_LEVELS = [
-        'error',
-        'info'
+    public const MATTERMOST_PRIORITY_VALUES = [
+        'urgent',
+        'important'
     ];
 
     public function __construct()
@@ -35,6 +39,21 @@ class LaravelLogMonitorService
             return;
         }
 
+        $this->context = $event->context ?? [];
+        $this->llmContext = $this->context['llm'] ?? [];
+
+        $level = strtolower($event->level);
+        
+        if (!($level === 'error' || (isset($this->llmContext['alert']) && $this->llmContext['alert'] === true))) {
+            return;
+        }
+
+        if (!empty($this->llmContext)) {
+            $this->priority = $this->extractPriorityFromContext();
+        }
+
+        $this->filtered_context = $this->filterContext();
+
         $this->sendToMattermost($event);
 
         if (!$this->config['channels']['email']['send_as_backup']) {
@@ -50,16 +69,6 @@ class LaravelLogMonitorService
             return;
         }
 
-        $level = strtolower($event->level);
-
-        if (!in_array($level, self::ALLOWED_LEVELS)) {
-            return;
-        }
-
-        if (!($emailConfig['notification_levels'][$level] ?? false)) {
-            return;
-        }
-
         $recipients = $this->getArrayFromString($emailConfig['recipients']);
 
         if (empty($recipients)) {
@@ -69,7 +78,7 @@ class LaravelLogMonitorService
         $emailData = [
             'level' => $event->level,
             'message' => $event->message,
-            'context' => $event->context ?? []
+            'context' => $this->context
         ];
 
         foreach ($recipients as $recipient) {
@@ -88,31 +97,22 @@ class LaravelLogMonitorService
         if (!$mattermostConfig['enabled']) {
             return;
         }
-
-        $level = strtolower($event->level);
         
-        if (!in_array($level, self::ALLOWED_LEVELS)) {
-            return;
-        }
+        $channel_id = $mattermostConfig['channel_id'] ?? null;
 
-        $levelConfig = $mattermostConfig['notification_levels'][$level] ?? null;
-
-        if (!$levelConfig || !$levelConfig['enabled']) {
+        if (empty($channel_id)) {
             return;
         }
 
         $formatted_message = $this->formatMattermostMessage($event);
 
         $post_data = [
-            'channel_id' => $levelConfig['channel_id'],
+            'channel_id' => $channel_id,
             'props' => [
                 'attachments' => [
                     [
                         'title' => $formatted_message['title'],
-                        'color' => match ($level) {
-                            'error' => '#d24a4e',
-                            default => '#2183fc',
-                        },
+                        'color' => strtolower($event->level) === 'error' ? '#d24a4e' : '#2183fc',
                         'text' => $formatted_message['message'],
                         'footer' => config('app.name'),
                     ]
@@ -120,10 +120,10 @@ class LaravelLogMonitorService
             ]
         ];
 
-        if ($level === 'error') {
+        if ($this->priority !== null) {
             $post_data['metadata'] = [
                 'priority' => [
-                    'priority' => 'urgent'
+                    'priority' => $this->priority
                 ]
             ];
         }
@@ -139,7 +139,7 @@ class LaravelLogMonitorService
             }
     
         } catch (\Exception $e) {
-            error_log("Failed to send to Mattermost channel {$levelConfig['channel_id']}: " . $e->getMessage());
+            error_log("Failed to send to Mattermost channel {$channel_id}: " . $e->getMessage());
 
             if ($this->config['channels']['email']['send_as_backup']) {
                 $this->sendEmailNotification($event);
@@ -154,9 +154,9 @@ class LaravelLogMonitorService
 
         $result['message'] = $event->message;
 
-        if (!empty($event->context)) {
-            $result['message'] .= "\n**Context:**\n```json\n" . 
-                json_encode($event->context, JSON_PRETTY_PRINT) . 
+        if (!empty($this->filtered_context)) {
+            $result['message'] .= "\n\n**Context:**\n```json\n" . 
+                json_encode($this->filtered_context, JSON_PRETTY_PRINT) . 
                 "\n```";
         }
 
@@ -181,12 +181,8 @@ class LaravelLogMonitorService
             if (empty($this->config['channels']['mattermost']['token'])) {
                 throw new \InvalidArgumentException('Mattermost token is required when Mattermost is enabled');
             }
-            
-            foreach (['error', 'warning'] as $level) {
-                if (($this->config['channels']['mattermost']['notification_levels'][$level]['enable'] ?? false) 
-                    && empty($this->config['channels']['mattermost']['notification_levels'][$level]['channel_id'])) {
-                    throw new \InvalidArgumentException("Mattermost channel_id is required for {$level} level when enabled");
-                }
+            if (empty($this->config['channels']['mattermost']['channel_id'])) {
+                throw new \InvalidArgumentException('Mattermost channel_id is required when Mattermost is enabled');
             }
         }
 
@@ -201,5 +197,38 @@ class LaravelLogMonitorService
                 }
             }
         }
+    }
+
+    protected function extractPriorityFromContext(): ?string
+    {
+        $priority = null;
+        
+        if (isset($this->llmContext['priority']) && is_string($this->llmContext['priority'])) {
+            $priorityValue = strtolower($this->llmContext['priority']);
+            
+            if (in_array($priorityValue, self::MATTERMOST_PRIORITY_VALUES)) {
+                $priority = $priorityValue;
+            }
+        }
+        
+        return $priority;
+    }
+
+    protected function filterContext(): array
+    {
+        if (empty($this->context)) {
+            return [];
+        }
+        
+        // Create a copy of the full context for filtering
+        $filteredContext = $this->context;
+        
+        // If llm data exists, we'll remove it after extracting what we need
+        if (isset($filteredContext['llm'])) {
+            unset($filteredContext['llm']);
+        }
+        
+        // Return the filtered context with any llm configuration removed
+        return $filteredContext;
     }
 }
