@@ -1,8 +1,12 @@
 # Laravel Log Monitor
 
-Get notifications upon writing the Log messages.
+Get notifications when log messages are written in your Laravel application.
 
-## Usage
+## Overview
+
+Laravel Log Monitor sends you alerts via Mattermost and/or email when important log events occur in your application. This helps you stay on top of critical issues and respond quickly to potential problems.
+
+## Installation
 
 Install it with Composer in your Laravel app using
 
@@ -12,41 +16,65 @@ composer require lexo/laravel-log-monitor
 
 ## ENV variables
 
-In order to use this package you would need to set some ENV varuiables
+Configure the package by adding these variables to your .env file:
 
 ```
+# Environments where monitoring is active (comma-separated)
 LARAVEL_LOG_MONITOR_ENVIRONMENTS=production,local
+
+# Mattermost integration settings
 LARAVEL_LOG_MONITOR_MATTERMOST_URL=https://your-mattermost-url.tld
 LARAVEL_LOG_MONITOR_MATTERMOST_TOKEN=your-mattermost-token
-LARAVEL_LOG_MONITOR_MATTERMOST_ERROR_CHANNEL=error-channel-id
-LARAVEL_LOG_MONITOR_MATTERMOST_INFO_CHANNEL=info-channel-id
+LARAVEL_LOG_MONITOR_MATTERMOST_CHANNEL=mattermost-channel-id
+
+# Email notification recipients (comma-separated)
 LARAVEL_LOG_MONITOR_EMAIL_RECIPIENTS=email1@website.tld,email2@website.tld
 ```
 
-By default, only `production` environment is set. Also, E-Mail notifications are being used only as a backup if Mattermost notifications fail. If you want to enable simultaneously Mattermost and E-Mail notifications set env variable `LARAVEL_LOG_MONITOR_EMAIL_SEND_AS_BACKUP` to `false`.
+By default:
 
-The full list of available env variables can be found in config file.
+Only the production environment is monitored
+Email notifications serve as a backup if Mattermost notifications fail
 
-### Mattermost priority post settings
+To enable simultaneous Mattermost and email notifications, set in .env file:
 
-Mattermost priority has `important` and `urgent` values. This can be passes as a part of the Log message context.
+```
+LARAVEL_LOG_MONITOR_EMAIL_SEND_AS_BACKUP=false
+```
 
-Example:
+The complete list of configuration options is available in the config file.
+
+### Mattermost Priority Settings
+
+You can set Mattermost notification priority using the `llm` context key in your log messages:
 
 ```php
-Log::error('test error', [
-    'priority' => 'important',
+Log::critical('test error', [
+    'llm' => [
+        'priority' => 'important',
+        'alert' => true
+    ],
     'something' => 'else'
 ]);
 ```
 
-## Publishing files (optional)
+Notes:
 
-You can publish config file using this command
+- Logs of `error` type are always monitored by default
+- Other log types can be included by adding `'alert' => true` in the `llm` context
+- Priority can be set to `important` or `urgent`
+
+## Customization (Optional)
+
+### Publishing Configuration
+
+Publish the configuration file to customize settings:
 
 ```bash
 php artisan vendor:publish --tag=laravel-log-monitor-config
 ```
+
+### Publishing View Templates
 
 Also you can publish views files using this command
 
