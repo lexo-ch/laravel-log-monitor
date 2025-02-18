@@ -1,6 +1,5 @@
 {
     "name": "lexo/laravel-log-monitor",
-    "version": "1.0.0",
     "description": "Get notifications upon writing the Log messages.",
     "type": "library",
     "license": "MIT",

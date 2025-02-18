@@ -76,7 +76,7 @@ php artisan vendor:publish --tag=laravel-log-monitor-config
 
 ### Publishing View Templates
 
-Also you can publish views files using this command
+Customize the notification templates by publishing the view files:
 
 ```bash
 php artisan vendor:publish --tag=laravel-log-monitor-views
