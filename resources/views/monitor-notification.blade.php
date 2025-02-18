@@ -89,9 +89,7 @@
 
         @if(!empty($emailData['context']))
             <h3>Context Details</h3>
-            <div class="context">
-                @json($emailData['context'], JSON_PRETTY_PRINT)
-            </div>
+            <div class="context">@json($emailData['context'])</div>
         @endif
 
         <div class="footer">
