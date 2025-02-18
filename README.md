@@ -27,6 +27,19 @@ By default, only `production` environment is set. Also, E-Mail notifications are
 
 The full list of available env variables can be found in config file.
 
+### Mattermost priority post settings
+
+Mattermost priority has `important` and `urgent` values. This can be passes as a part of the Log message context.
+
+Example:
+
+```php
+Log::error('test error', [
+    'priority' => 'important',
+    'something' => 'else'
+]);
+```
+
 ## Publishing files (optional)
 
 You can publish config file using this command
