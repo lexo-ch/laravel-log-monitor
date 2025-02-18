@@ -10,10 +10,18 @@ use LEXO\LaravelLogMonitor\Mail\Notification;
 class LaravelLogMonitorService
 {
     protected array $config;
+    protected array $context;
+    protected array $filtered_context = [];
+    protected ?string $priority = null;
 
     public const ALLOWED_LEVELS = [
         'error',
         'info'
+    ];
+
+    public const MATTERMOST_PRIORITY_VALUES = [
+        'urgent',
+        'important'
     ];
 
     public function __construct()
@@ -34,6 +42,16 @@ class LaravelLogMonitorService
         ) {
             return;
         }
+
+        $this->context = $event->context ?? [];
+
+        if (!empty($this->context)) {
+            $this->priority = $this->extractPriorityFromContext();
+        }
+
+        $this->filtered_context = $this->priority !== null
+            ? $this->filtered_context = $this->filterContext()
+            : $this->context;
 
         $this->sendToMattermost($event);
 
@@ -69,7 +87,7 @@ class LaravelLogMonitorService
         $emailData = [
             'level' => $event->level,
             'message' => $event->message,
-            'context' => $event->context ?? []
+            'context' => $this->context
         ];
 
         foreach ($recipients as $recipient) {
@@ -120,10 +138,10 @@ class LaravelLogMonitorService
             ]
         ];
 
-        if ($level === 'error') {
+        if ($this->priority !== null) {
             $post_data['metadata'] = [
                 'priority' => [
-                    'priority' => 'urgent'
+                    'priority' => $this->priority
                 ]
             ];
         }
@@ -154,9 +172,9 @@ class LaravelLogMonitorService
 
         $result['message'] = $event->message;
 
-        if (!empty($event->context)) {
-            $result['message'] .= "\n**Context:**\n```json\n" . 
-                json_encode($event->context, JSON_PRETTY_PRINT) . 
+        if (!empty($this->filtered_context)) {
+            $result['message'] .= "\n\n**Context:**\n```json\n" . 
+                json_encode($this->filtered_context, JSON_PRETTY_PRINT) . 
                 "\n```";
         }
 
@@ -201,5 +219,33 @@ class LaravelLogMonitorService
                 }
             }
         }
+    }
+
+    protected function extractPriorityFromContext(): ?string
+    {
+        $priority = null;
+        
+        if (isset($this->context['priority']) && is_string($this->context['priority'])) {
+            $priorityValue = strtolower($this->context['priority']);
+            
+            if (in_array($priorityValue, self::MATTERMOST_PRIORITY_VALUES)) {
+                $priority = $priorityValue;
+            }
+        }
+        
+        return $priority;
+    }
+
+    protected function filterContext(): array
+    {
+        $filteredContext = $this->context;
+        
+        unset($filteredContext['priority']);
+        
+        if (empty($filteredContext)) {
+            return [];
+        }
+        
+        return $filteredContext;
     }
 }
