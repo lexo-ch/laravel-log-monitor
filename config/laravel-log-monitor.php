@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'enabled' => env('LARAVEL_LOG_MONITOR_ENABLED', true),
+    'enabled' => env('LARAVEL_LOG_MONITOR_ENABLED', false),
     'environments' => env('LARAVEL_LOG_MONITOR_ENVIRONMENTS', 'production'),
     'channels' => [
         'mattermost' => [
