@@ -23,15 +23,16 @@ class LaravelLogMonitorService
     public function __construct()
     {
         $this->config = config('laravel-log-monitor');
+
+        if (!$this->config['enabled']) {
+            return;
+        }
+        
         $this->validateConfig();
     }
 
     public function handle(MessageLogged $event): void
     {
-        if (!$this->config['enabled']) {
-            return;
-        }
-
         if (!in_array(
             app()->environment(),
             $this->getArrayFromString($this->config['environments']))
