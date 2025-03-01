@@ -19,11 +19,12 @@ composer require lexo/laravel-log-monitor
 Configure the package by adding these variables to your .env file:
 
 ```
+LARAVEL_LOG_MONITOR_ENABLED=true
+
 # Environments where monitoring is active (comma-separated)
 LARAVEL_LOG_MONITOR_ENVIRONMENTS=production,local
 
 # Mattermost integration settings
-LARAVEL_LOG_MONITOR_ENABLED=true
 LARAVEL_LOG_MONITOR_MATTERMOST_URL=https://your-mattermost-url.tld
 LARAVEL_LOG_MONITOR_MATTERMOST_TOKEN=your-mattermost-token
 LARAVEL_LOG_MONITOR_MATTERMOST_CHANNEL=mattermost-channel-id
@@ -34,8 +35,8 @@ LARAVEL_LOG_MONITOR_EMAIL_RECIPIENTS=email1@website.tld,email2@website.tld
 
 By default:
 
-Only the production environment is monitored
-Email notifications serve as a backup if Mattermost notifications fail
+Only the production environment is monitored.
+Email notifications serve as a backup if Mattermost notifications fail.
 
 To enable simultaneous Mattermost and email notifications, set in .env file:
 
