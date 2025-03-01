@@ -23,6 +23,7 @@ Configure the package by adding these variables to your .env file:
 LARAVEL_LOG_MONITOR_ENVIRONMENTS=production,local
 
 # Mattermost integration settings
+LARAVEL_LOG_MONITOR_ENABLED=true
 LARAVEL_LOG_MONITOR_MATTERMOST_URL=https://your-mattermost-url.tld
 LARAVEL_LOG_MONITOR_MATTERMOST_TOKEN=your-mattermost-token
 LARAVEL_LOG_MONITOR_MATTERMOST_CHANNEL=mattermost-channel-id
