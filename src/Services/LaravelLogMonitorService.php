@@ -4,6 +4,7 @@ namespace LEXO\LaravelLogMonitor\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\View;
 use Illuminate\Log\Events\MessageLogged;
 use LEXO\LaravelLogMonitor\Mail\Notification;
 
@@ -76,15 +77,13 @@ class LaravelLogMonitorService
             return;
         }
 
-        $emailData = [
-            'level' => $event->level,
-            'message' => $event->message,
-            'context' => $this->context
-        ];
-
         foreach ($recipients as $recipient) {
             try {
-                Mail::to($recipient)->send(new Notification($emailData));
+                Mail::to($recipient)->send(new Notification([
+                    'level' => $event->level,
+                    'message' => $event->message,
+                    'context' => $this->context
+                ]));
             } catch (\Exception $e) {
                 error_log("Failed to send error notification email to {$recipient}: " . $e->getMessage());
             }
@@ -105,20 +104,9 @@ class LaravelLogMonitorService
             return;
         }
 
-        $formatted_message = $this->formatMattermostMessage($event);
-
         $post_data = [
             'channel_id' => $channel_id,
-            'props' => [
-                'attachments' => [
-                    [
-                        'title' => $formatted_message['title'],
-                        'color' => strtolower($event->level) === 'error' ? '#d24a4e' : '#2183fc',
-                        'text' => $formatted_message['message'],
-                        'footer' => config('app.name'),
-                    ]
-                ]
-            ]
+            'message' => $this->getMattermostMessage($event)
         ];
 
         if ($this->priority !== null) {
@@ -138,7 +126,6 @@ class LaravelLogMonitorService
             if (!$response->successful()) {
                 throw new \Exception('Mattermost API returned: ' . $response->status() . ' ' . $response->body());
             }
-    
         } catch (\Exception $e) {
             error_log("Failed to send to Mattermost channel {$channel_id}: " . $e->getMessage());
 
@@ -148,20 +135,13 @@ class LaravelLogMonitorService
         }
     }
 
-    protected function formatMattermostMessage(MessageLogged $event): array
+    protected function getMattermostMessage(MessageLogged $event): string
     {
-        $level = strtolower($event->level);
-        $result['title'] = config('app.name'). " - New {$level} notification" . ' (' . now()->format('d.m.Y H:i:s') . ')';
-
-        $result['message'] = $event->message;
-
-        if (!empty($this->filtered_context)) {
-            $result['message'] .= "\n\n**Context:**\n```json\n" . 
-                json_encode($this->filtered_context, JSON_PRETTY_PRINT) . 
-                "\n```";
-        }
-
-        return $result;
+        return View::make('laravel-log-monitor-mattermost-views::notification', [
+            'level' => $event->level,
+            'message' => $event->message,
+            'context' => $this->filtered_context
+        ])->render();
     }
 
     protected function getArrayFromString(string $string): array
@@ -221,15 +201,12 @@ class LaravelLogMonitorService
             return [];
         }
         
-        // Create a copy of the full context for filtering
         $filteredContext = $this->context;
         
-        // If llm data exists, we'll remove it after extracting what we need
         if (isset($filteredContext['llm'])) {
             unset($filteredContext['llm']);
         }
         
-        // Return the filtered context with any llm configuration removed
         return $filteredContext;
     }
 }

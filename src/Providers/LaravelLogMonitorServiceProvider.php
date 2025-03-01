@@ -39,15 +39,24 @@ class LaravelLogMonitorServiceProvider extends ServiceProvider
             LaravelLogMonitorService::class
         );
 
-        $this->loadViewsFrom(resource_path('laravel-log-monitor/views'), 'laravel-log-monitor-email-views');
-        $this->loadViewsFrom(__DIR__.'/../../resources/views', 'laravel-log-monitor-email-views');
+        // Load email views
+        $this->loadViewsFrom(resource_path('laravel-log-monitor/email-views'), 'laravel-log-monitor-email-views');
+        $this->loadViewsFrom(__DIR__.'/../../resources/views/email', 'laravel-log-monitor-email-views');
+        
+        // Load Mattermost views
+        $this->loadViewsFrom(resource_path('laravel-log-monitor/mattermost-views'), 'laravel-log-monitor-mattermost-views');
+        $this->loadViewsFrom(__DIR__.'/../../resources/views/mattermost', 'laravel-log-monitor-mattermost-views');
 
         $this->publishes([
             __DIR__.'/../../config/laravel-log-monitor.php' => config_path('laravel-log-monitor.php')
         ], 'laravel-log-monitor-config');
 
         $this->publishes([
-            __DIR__.'/../../resources/views' => resource_path('laravel-log-monitor/views')
-        ], 'laravel-log-monitor-views');
+            __DIR__.'/../../resources/views/email' => resource_path('laravel-log-monitor/email-views')
+        ], 'laravel-log-monitor-views-email');
+        
+        $this->publishes([
+            __DIR__.'/../../resources/views/mattermost' => resource_path('laravel-log-monitor/mattermost-views')
+        ], 'laravel-log-monitor-views-mattermost');
     }
 }

@@ -31,7 +31,7 @@ class Notification extends Mailable
     public function content(): Content
     {
         return new Content(
-            view: 'laravel-log-monitor-email-views::monitor-notification',
+            view: 'laravel-log-monitor-email-views::notification',
         );
     }
 }

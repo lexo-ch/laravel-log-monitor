@@ -76,8 +76,18 @@ php artisan vendor:publish --tag=laravel-log-monitor-config
 
 ### Publishing View Templates
 
+#### E-Mail
+
 Customize the notification templates by publishing the view files:
 
 ```bash
-php artisan vendor:publish --tag=laravel-log-monitor-views
+php artisan vendor:publish --tag=laravel-log-monitor-views-email
+```
+
+#### Mattermost
+
+Customize the notification templates by publishing the view files:
+
+```bash
+php artisan vendor:publish --tag=laravel-log-monitor-views-mattermost
 ```
