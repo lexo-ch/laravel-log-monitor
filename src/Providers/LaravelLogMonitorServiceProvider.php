@@ -40,11 +40,15 @@ class LaravelLogMonitorServiceProvider extends ServiceProvider
         );
 
         // Load email views
-        $this->loadViewsFrom(resource_path('laravel-log-monitor/email-views'), 'laravel-log-monitor-email-views');
+        if (is_dir(resource_path('laravel-log-monitor/email-views'))) {
+            $this->loadViewsFrom(resource_path('laravel-log-monitor/email-views'), 'laravel-log-monitor-email-views');
+        }
         $this->loadViewsFrom(__DIR__.'/../../resources/views/email', 'laravel-log-monitor-email-views');
         
         // Load Mattermost views
-        $this->loadViewsFrom(resource_path('laravel-log-monitor/mattermost-views'), 'laravel-log-monitor-mattermost-views');
+        if (is_dir(resource_path('laravel-log-monitor/mattermost-views'))) {
+            $this->loadViewsFrom(resource_path('laravel-log-monitor/mattermost-views'), 'laravel-log-monitor-mattermost-views');
+        }
         $this->loadViewsFrom(__DIR__.'/../../resources/views/mattermost', 'laravel-log-monitor-mattermost-views');
 
         $this->publishes([
