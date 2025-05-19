@@ -5,6 +5,7 @@ namespace LEXO\LaravelLogMonitor\Services;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\View;
+use Illuminate\Support\Facades\Context;
 use Illuminate\Log\Events\MessageLogged;
 use LEXO\LaravelLogMonitor\Mail\Notification;
 
@@ -28,7 +29,7 @@ class LaravelLogMonitorService
         if (!$this->config['enabled']) {
             return;
         }
-        
+
         $this->validateConfig();
     }
 
@@ -45,10 +46,12 @@ class LaravelLogMonitorService
         $this->llmContext = $this->context['llm'] ?? [];
 
         $level = strtolower($event->level);
-        
+
         if (!($level === 'error' || (isset($this->llmContext['alert']) && $this->llmContext['alert'] === true))) {
             return;
         }
+
+        $this->context = array_merge($this->context, Context::all());
 
         if (!empty($this->llmContext)) {
             $this->priority = $this->extractPriorityFromContext();
@@ -66,7 +69,7 @@ class LaravelLogMonitorService
     private function sendEmailNotification(MessageLogged $event): void
     {
         $emailConfig = $this->config['channels']['email'];
-        
+
         if (!$emailConfig['enabled']) {
             return;
         }
@@ -93,11 +96,11 @@ class LaravelLogMonitorService
     protected function sendToMattermost(MessageLogged $event): void
     {
         $mattermostConfig = $this->config['channels']['mattermost'];
-        
+
         if (!$mattermostConfig['enabled']) {
             return;
         }
-        
+
         $channel_id = $mattermostConfig['channel_id'] ?? null;
 
         if (empty($channel_id)) {
@@ -122,7 +125,7 @@ class LaravelLogMonitorService
                 'Authorization' => 'Bearer ' . $mattermostConfig['token'],
                 'Content-Type' => 'application/json',
             ])->post($mattermostConfig['url'] . '/api/v4/posts', $post_data);
-    
+
             if (!$response->successful()) {
                 throw new \Exception('Mattermost API returned: ' . $response->status() . ' ' . $response->body());
             }
@@ -171,7 +174,7 @@ class LaravelLogMonitorService
             if (empty($this->config['channels']['email']['recipients'])) {
                 throw new \InvalidArgumentException('Email recipients are required when email notifications are enabled');
             }
-            
+
             foreach ($this->getArrayFromString($this->config['channels']['email']['recipients']) as $email) {
                 if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                     throw new \InvalidArgumentException("Invalid email address: {$email}");
@@ -183,15 +186,15 @@ class LaravelLogMonitorService
     protected function extractPriorityFromContext(): ?string
     {
         $priority = null;
-        
+
         if (isset($this->llmContext['priority']) && is_string($this->llmContext['priority'])) {
             $priorityValue = strtolower($this->llmContext['priority']);
-            
+
             if (in_array($priorityValue, self::MATTERMOST_PRIORITY_VALUES)) {
                 $priority = $priorityValue;
             }
         }
-        
+
         return $priority;
     }
 
@@ -200,13 +203,13 @@ class LaravelLogMonitorService
         if (empty($this->context)) {
             return [];
         }
-        
+
         $filteredContext = $this->context;
-        
+
         if (isset($filteredContext['llm'])) {
             unset($filteredContext['llm']);
         }
-        
+
         return $filteredContext;
     }
 }
