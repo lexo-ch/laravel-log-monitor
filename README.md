@@ -72,6 +72,68 @@ Notes:
 - Other log types can be included by adding `'alert' => true` in the `llm` context
 - Priority can be set to `important` or `urgent`
 
+### Notification Events
+
+The package fires events during the notification lifecycle, allowing you to hook into and customize the behavior:
+
+#### Available Events
+
+**NotificationSending** - Fired before attempting to send a notification
+```php
+use LEXO\LaravelLogMonitor\Events\NotificationSending;
+
+Event::listen(NotificationSending::class, function (NotificationSending $event) {
+    // $event->event - The original MessageLogged event
+    // $event->channel - 'mattermost' or 'email'
+    // $event->payload - The data being sent
+
+    Log::info("Sending notification via {$event->channel}");
+});
+```
+
+**NotificationSent** - Fired after successful notification delivery
+```php
+use LEXO\LaravelLogMonitor\Events\NotificationSent;
+
+Event::listen(NotificationSent::class, function (NotificationSent $event) {
+    // $event->event - The original MessageLogged event
+    // $event->channel - 'mattermost' or 'email'
+    // $event->response - Response data from the channel
+
+    Log::info("Notification sent successfully via {$event->channel}");
+});
+```
+
+**NotificationFailed** - Fired when notification delivery fails
+```php
+use LEXO\LaravelLogMonitor\Events\NotificationFailed;
+
+Event::listen(NotificationFailed::class, function (NotificationFailed $event) {
+    // $event->event - The original MessageLogged event
+    // $event->channel - 'mattermost' or 'email'
+    // $event->exception - The exception that occurred
+
+    // Send to alternative monitoring service
+    SentryService::captureException($event->exception);
+});
+```
+
+#### Example: Custom Slack Notification on Failure
+
+```php
+// In AppServiceProvider or EventServiceProvider
+use LEXO\LaravelLogMonitor\Events\NotificationFailed;
+
+Event::listen(NotificationFailed::class, function (NotificationFailed $event) {
+    if ($event->channel === 'mattermost') {
+        // Fallback to Slack if Mattermost fails
+        Http::post(config('services.slack.webhook'), [
+            'text' => "Mattermost notification failed: {$event->exception->getMessage()}"
+        ]);
+    }
+});
+```
+
 ## Customization (Optional)
 
 ### Publishing Configuration

@@ -7,6 +7,9 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\View;
 use Illuminate\Log\Events\MessageLogged;
 use LEXO\LaravelLogMonitor\Mail\Notification;
+use LEXO\LaravelLogMonitor\Events\NotificationSending;
+use LEXO\LaravelLogMonitor\Events\NotificationSent;
+use LEXO\LaravelLogMonitor\Events\NotificationFailed;
 
 class LaravelLogMonitorService
 {
@@ -78,13 +81,24 @@ class LaravelLogMonitorService
         }
 
         foreach ($recipients as $recipient) {
+            $emailData = [
+                'level' => $event->level,
+                'message' => $event->message,
+                'context' => $this->filtered_context
+            ];
+
+            // Fire event before sending
+            event(new NotificationSending($event, 'email', ['recipient' => $recipient, 'data' => $emailData]));
+
             try {
-                Mail::to($recipient)->send(new Notification([
-                    'level' => $event->level,
-                    'message' => $event->message,
-                    'context' => $this->context
-                ]));
+                Mail::to($recipient)->send(new Notification($emailData));
+
+                // Fire event after successful send
+                event(new NotificationSent($event, 'email', ['recipient' => $recipient]));
             } catch (\Exception $e) {
+                // Fire event on failure
+                event(new NotificationFailed($event, 'email', $e));
+
                 error_log("Failed to send error notification email to {$recipient}: " . $e->getMessage());
             }
         }
@@ -117,6 +131,9 @@ class LaravelLogMonitorService
             ];
         }
 
+        // Fire event before sending
+        event(new NotificationSending($event, 'mattermost', $post_data));
+
         try {
             $response = Http::retry(
                 $mattermostConfig['retry_times'] ?? 3,
@@ -131,7 +148,13 @@ class LaravelLogMonitorService
             if (!$response->successful()) {
                 throw new \Exception('Mattermost API returned: ' . $response->status() . ' ' . $response->body());
             }
+
+            // Fire event after successful send
+            event(new NotificationSent($event, 'mattermost', $response));
         } catch (\Exception $e) {
+            // Fire event on failure
+            event(new NotificationFailed($event, 'mattermost', $e));
+
             error_log("Failed to send to Mattermost channel {$channel_id}: " . $e->getMessage());
 
             if ($this->config['channels']['email']['send_as_backup']) {
