@@ -12,6 +12,21 @@ return [
             'retry_times' => env('LARAVEL_LOG_MONITOR_MATTERMOST_RETRY_TIMES', 3),
             'retry_delay' => env('LARAVEL_LOG_MONITOR_MATTERMOST_RETRY_DELAY', 100),
             'timeout' => env('LARAVEL_LOG_MONITOR_MATTERMOST_TIMEOUT', 10),
+
+            // Additional named channels for routing specific logs
+            // Route logs by adding 'channel' => 'channel-name' in the llm context
+            // Supports both single channel (string) and multiple channels (array)
+            'additional_channels' => [
+                // Single channel example:
+                // 'payments' => 'mattermost-channel-id-for-payments',
+                // 'security' => 'mattermost-channel-id-for-security',
+
+                // Multiple channels example (sends to all channels):
+                // 'critical' => [
+                //     'mattermost-channel-id-oncall',
+                //     'mattermost-channel-id-management',
+                // ],
+            ],
         ],
         'email' => [
             'enabled' => env('LARAVEL_LOG_MONITOR_EMAIL_ENABLED', true),

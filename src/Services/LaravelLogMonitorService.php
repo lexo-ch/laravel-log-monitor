@@ -107,56 +107,68 @@ class LaravelLogMonitorService
     protected function sendToMattermost(MessageLogged $event): void
     {
         $mattermostConfig = $this->config['channels']['mattermost'];
-        
+
         if (!$mattermostConfig['enabled']) {
             return;
         }
-        
-        $channel_id = $mattermostConfig['channel_id'] ?? null;
 
-        if (empty($channel_id)) {
+        // Determine which channels to use (can be multiple)
+        $channelIds = $this->resolveChannelId($mattermostConfig);
+
+        if (empty($channelIds)) {
             return;
         }
 
-        $post_data = [
-            'channel_id' => $channel_id,
-            'message' => $this->getMattermostMessage($event)
-        ];
+        $message = $this->getMattermostMessage($event);
+        $hasFailure = false;
 
-        if ($this->priority !== null) {
-            $post_data['metadata'] = [
-                'priority' => [
-                    'priority' => $this->priority
-                ]
+        // Send to each channel
+        foreach ($channelIds as $channel_id) {
+            $post_data = [
+                'channel_id' => $channel_id,
+                'message' => $message
             ];
-        }
 
-        // Fire event before sending
-        event(new NotificationSending($event, 'mattermost', $post_data));
-
-        try {
-            $response = Http::retry(
-                $mattermostConfig['retry_times'] ?? 3,
-                $mattermostConfig['retry_delay'] ?? 100
-            )
-            ->timeout($mattermostConfig['timeout'] ?? 10)
-            ->withHeaders([
-                'Authorization' => 'Bearer ' . $mattermostConfig['token'],
-                'Content-Type' => 'application/json',
-            ])->post($mattermostConfig['url'] . '/api/v4/posts', $post_data);
-
-            if (!$response->successful()) {
-                throw new \Exception('Mattermost API returned: ' . $response->status() . ' ' . $response->body());
+            if ($this->priority !== null) {
+                $post_data['metadata'] = [
+                    'priority' => [
+                        'priority' => $this->priority
+                    ]
+                ];
             }
 
-            // Fire event after successful send
-            event(new NotificationSent($event, 'mattermost', $response));
-        } catch (\Exception $e) {
-            // Fire event on failure
-            event(new NotificationFailed($event, 'mattermost', $e));
+            // Fire event before sending
+            event(new NotificationSending($event, 'mattermost', $post_data));
 
-            error_log("Failed to send to Mattermost channel {$channel_id}: " . $e->getMessage());
+            try {
+                $response = Http::retry(
+                    $mattermostConfig['retry_times'] ?? 3,
+                    $mattermostConfig['retry_delay'] ?? 100
+                )
+                ->timeout($mattermostConfig['timeout'] ?? 10)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $mattermostConfig['token'],
+                    'Content-Type' => 'application/json',
+                ])->post($mattermostConfig['url'] . '/api/v4/posts', $post_data);
 
+                if (!$response->successful()) {
+                    throw new \Exception('Mattermost API returned: ' . $response->status() . ' ' . $response->body());
+                }
+
+                // Fire event after successful send
+                event(new NotificationSent($event, 'mattermost', $response));
+            } catch (\Exception $e) {
+                $hasFailure = true;
+
+                // Fire event on failure
+                event(new NotificationFailed($event, 'mattermost', $e));
+
+                error_log("Failed to send to Mattermost channel {$channel_id}: " . $e->getMessage());
+            }
+        }
+
+        // Trigger email backup only if ALL channels failed
+        if ($hasFailure && count($channelIds) > 0) {
             if ($this->config['channels']['email']['send_as_backup']) {
                 $this->sendEmailNotification($event);
             }
@@ -192,6 +204,23 @@ class LaravelLogMonitorService
             }
             if (empty($this->config['channels']['mattermost']['channel_id'])) {
                 throw new \InvalidArgumentException('Mattermost channel_id is required when Mattermost is enabled');
+            }
+
+            // Validate additional channels if configured
+            $additionalChannels = $this->config['channels']['mattermost']['additional_channels'] ?? [];
+            foreach ($additionalChannels as $name => $channelIds) {
+                // Support both string (single channel) and array (multiple channels)
+                $channelIdsArray = is_array($channelIds) ? $channelIds : [$channelIds];
+
+                foreach ($channelIdsArray as $channelId) {
+                    if (empty($channelId)) {
+                        throw new \InvalidArgumentException("Mattermost additional channel '{$name}' has empty channel_id");
+                    }
+                }
+
+                if (empty($channelIdsArray)) {
+                    throw new \InvalidArgumentException("Mattermost additional channel '{$name}' has no channel_ids configured");
+                }
             }
         }
 
@@ -236,5 +265,47 @@ class LaravelLogMonitorService
         }
         
         return $filteredContext;
+    }
+
+    protected function resolveChannelId(array $mattermostConfig): array
+    {
+        // Check if a specific channel is requested via llm context
+        $requestedChannels = $this->llmContext['channel'] ?? null;
+
+        if ($requestedChannels === null) {
+            // No specific channel requested, use default
+            $defaultChannel = $mattermostConfig['channel_id'] ?? null;
+            return $defaultChannel ? [$defaultChannel] : [];
+        }
+
+        // Normalize to array (supports both string and array of channel names)
+        $channelNames = is_array($requestedChannels) ? $requestedChannels : [$requestedChannels];
+        $resolvedChannelIds = [];
+
+        foreach ($channelNames as $channelName) {
+            // Special case: 'default' keyword uses the default channel_id
+            if ($channelName === 'default') {
+                $defaultChannel = $mattermostConfig['channel_id'] ?? null;
+                if ($defaultChannel) {
+                    $resolvedChannelIds[] = $defaultChannel;
+                }
+                continue;
+            }
+
+            // Look up in additional_channels
+            if (isset($mattermostConfig['additional_channels'][$channelName])) {
+                $channelIds = $mattermostConfig['additional_channels'][$channelName];
+
+                // The value can be a string (single channel) or array (multiple channels)
+                if (is_array($channelIds)) {
+                    $resolvedChannelIds = array_merge($resolvedChannelIds, $channelIds);
+                } else {
+                    $resolvedChannelIds[] = $channelIds;
+                }
+            }
+        }
+
+        // Remove duplicates and reindex
+        return array_values(array_unique($resolvedChannelIds));
     }
 }
