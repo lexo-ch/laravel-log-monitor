@@ -8,6 +8,7 @@
 .env
 .env.backup
 .phpunit.result.cache
+.phpunit.cache
 Homestead.json
 Homestead.yaml
 npm-debug.log
@@ -22,3 +23,12 @@ yarn-error.log
 
 # Ignore Mac DS_Store files
 .DS_Store
+
+# Test coverage
+/coverage
+/.phpunit.cache
+.pest
+
+# VSCode
+.vscode
+*.code-workspace
