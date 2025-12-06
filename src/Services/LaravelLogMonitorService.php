@@ -16,7 +16,7 @@ class LaravelLogMonitorService
     protected array $config;
     protected array $context;
     protected array $llmContext;
-    protected array $filtered_context = [];
+    protected array $filteredContext = [];
     protected ?string $priority = null;
 
     public const MATTERMOST_PRIORITY_VALUES = [
@@ -47,9 +47,7 @@ class LaravelLogMonitorService
         $this->context = $event->context ?? [];
         $this->llmContext = $this->context['llm'] ?? [];
 
-        $level = strtolower($event->level);
-        
-        if (!($level === 'error' || (isset($this->llmContext['alert']) && $this->llmContext['alert'] === true))) {
+        if (!$this->shouldMonitorEvent($event)) {
             return;
         }
 
@@ -57,7 +55,7 @@ class LaravelLogMonitorService
             $this->priority = $this->extractPriorityFromContext();
         }
 
-        $this->filtered_context = $this->filterContext();
+        $this->filteredContext = $this->filterContext();
 
         $this->sendToMattermost($event);
 
@@ -81,11 +79,8 @@ class LaravelLogMonitorService
         }
 
         foreach ($recipients as $recipient) {
-            $emailData = [
-                'level' => $event->level,
-                'message' => $event->message,
-                'context' => $this->filtered_context
-            ];
+            $emailData = $this->buildEmailData($event);
+
 
             // Fire event before sending
             event(new NotificationSending($event, 'email', ['recipient' => $recipient, 'data' => $emailData]));
@@ -123,33 +118,14 @@ class LaravelLogMonitorService
         $hasFailure = false;
 
         // Send to each channel
-        foreach ($channelIds as $channel_id) {
-            $post_data = [
-                'channel_id' => $channel_id,
-                'message' => $message
-            ];
-
-            if ($this->priority !== null) {
-                $post_data['metadata'] = [
-                    'priority' => [
-                        'priority' => $this->priority
-                    ]
-                ];
-            }
+        foreach ($channelIds as $channelId) {
+            $postData = $this->buildMattermostPostData($channelId, $message);
 
             // Fire event before sending
-            event(new NotificationSending($event, 'mattermost', $post_data));
+            event(new NotificationSending($event, 'mattermost', $postData));
 
             try {
-                $response = Http::retry(
-                    $mattermostConfig['retry_times'] ?? 3,
-                    $mattermostConfig['retry_delay'] ?? 100
-                )
-                ->timeout($mattermostConfig['timeout'] ?? 10)
-                ->withHeaders([
-                    'Authorization' => 'Bearer ' . $mattermostConfig['token'],
-                    'Content-Type' => 'application/json',
-                ])->post($mattermostConfig['url'] . '/api/v4/posts', $post_data);
+                $response = $this->sendMattermostPost($mattermostConfig, $postData);
 
                 if (!$response->successful()) {
                     throw new \Exception('Mattermost API returned: ' . $response->status() . ' ' . $response->body());
@@ -163,15 +139,13 @@ class LaravelLogMonitorService
                 // Fire event on failure
                 event(new NotificationFailed($event, 'mattermost', $e));
 
-                error_log("Failed to send to Mattermost channel {$channel_id}: " . $e->getMessage());
+                error_log("Failed to send to Mattermost channel {$channelId}: " . $e->getMessage());
             }
         }
 
-        // Trigger email backup only if ALL channels failed
-        if ($hasFailure && count($channelIds) > 0) {
-            if ($this->config['channels']['email']['send_as_backup']) {
-                $this->sendEmailNotification($event);
-            }
+        // Trigger email backup if any channel failed
+        if ($hasFailure && $this->config['channels']['email']['send_as_backup']) {
+            $this->sendEmailNotification($event);
         }
     }
 
@@ -180,7 +154,7 @@ class LaravelLogMonitorService
         return View::make('laravel-log-monitor-mattermost-views::notification', [
             'level' => $event->level,
             'message' => $event->message,
-            'context' => $this->filtered_context
+            'context' => $this->filteredContext
         ])->render();
     }
 
@@ -196,43 +170,61 @@ class LaravelLogMonitorService
     protected function validateConfig(): void
     {
         if ($this->config['channels']['mattermost']['enabled']) {
-            if (empty($this->config['channels']['mattermost']['url'])) {
-                throw new \InvalidArgumentException('Mattermost URL is required when Mattermost is enabled');
-            }
-            if (empty($this->config['channels']['mattermost']['token'])) {
-                throw new \InvalidArgumentException('Mattermost token is required when Mattermost is enabled');
-            }
-            if (empty($this->config['channels']['mattermost']['channel_id'])) {
-                throw new \InvalidArgumentException('Mattermost channel_id is required when Mattermost is enabled');
-            }
-
-            // Validate additional channels if configured
-            $additionalChannels = $this->config['channels']['mattermost']['additional_channels'] ?? [];
-            foreach ($additionalChannels as $name => $channelIds) {
-                // Support both string (single channel) and array (multiple channels)
-                $channelIdsArray = is_array($channelIds) ? $channelIds : [$channelIds];
-
-                foreach ($channelIdsArray as $channelId) {
-                    if (empty($channelId)) {
-                        throw new \InvalidArgumentException("Mattermost additional channel '{$name}' has empty channel_id");
-                    }
-                }
-
-                if (empty($channelIdsArray)) {
-                    throw new \InvalidArgumentException("Mattermost additional channel '{$name}' has no channel_ids configured");
-                }
-            }
+            $this->validateMattermostConfig();
         }
 
         if ($this->config['channels']['email']['enabled']) {
-            if (empty($this->config['channels']['email']['recipients'])) {
-                throw new \InvalidArgumentException('Email recipients are required when email notifications are enabled');
+            $this->validateEmailConfig();
+        }
+    }
+
+    protected function validateMattermostConfig(): void
+    {
+        $config = $this->config['channels']['mattermost'];
+
+        if (empty($config['url'])) {
+            throw new \InvalidArgumentException('Mattermost URL is required when Mattermost is enabled');
+        }
+
+        if (empty($config['token'])) {
+            throw new \InvalidArgumentException('Mattermost token is required when Mattermost is enabled');
+        }
+
+        if (empty($config['channel_id'])) {
+            throw new \InvalidArgumentException('Mattermost channel_id is required when Mattermost is enabled');
+        }
+
+        $this->validateAdditionalChannels($config['additional_channels'] ?? []);
+    }
+
+    protected function validateAdditionalChannels(array $additionalChannels): void
+    {
+        foreach ($additionalChannels as $name => $channelIds) {
+            $channelIdsArray = is_array($channelIds) ? $channelIds : [$channelIds];
+
+            if (empty($channelIdsArray)) {
+                throw new \InvalidArgumentException("Mattermost additional channel '{$name}' has no channel_ids configured");
             }
-            
-            foreach ($this->getArrayFromString($this->config['channels']['email']['recipients']) as $email) {
-                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                    throw new \InvalidArgumentException("Invalid email address: {$email}");
+
+            foreach ($channelIdsArray as $channelId) {
+                if (empty($channelId)) {
+                    throw new \InvalidArgumentException("Mattermost additional channel '{$name}' has empty channel_id");
                 }
+            }
+        }
+    }
+
+    protected function validateEmailConfig(): void
+    {
+        $config = $this->config['channels']['email'];
+
+        if (empty($config['recipients'])) {
+            throw new \InvalidArgumentException('Email recipients are required when email notifications are enabled');
+        }
+
+        foreach ($this->getArrayFromString($config['recipients']) as $email) {
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                throw new \InvalidArgumentException("Invalid email address: {$email}");
             }
         }
     }
@@ -257,13 +249,13 @@ class LaravelLogMonitorService
         if (empty($this->context)) {
             return [];
         }
-        
+
         $filteredContext = $this->context;
-        
+
         if (isset($filteredContext['llm'])) {
             unset($filteredContext['llm']);
         }
-        
+
         return $filteredContext;
     }
 
@@ -307,5 +299,54 @@ class LaravelLogMonitorService
 
         // Remove duplicates and reindex
         return array_values(array_unique($resolvedChannelIds));
+    }
+
+    protected function shouldMonitorEvent(MessageLogged $event): bool
+    {
+        $level = strtolower($event->level);
+
+        return $level === 'error'
+            || (isset($this->llmContext['alert']) && $this->llmContext['alert'] === true);
+    }
+
+    protected function buildEmailData(MessageLogged $event): array
+    {
+        return [
+            'level' => $event->level,
+            'message' => $event->message,
+            'context' => $this->filteredContext
+        ];
+    }
+
+    protected function buildMattermostPostData(string $channelId, string $message): array
+    {
+        $postData = [
+            'channel_id' => $channelId,
+            'message' => $message
+        ];
+
+        if ($this->priority !== null) {
+            $postData['metadata'] = [
+                'priority' => [
+                    'priority' => $this->priority
+                ]
+            ];
+        }
+
+        return $postData;
+    }
+
+    protected function sendMattermostPost(array $config, array $postData)
+    {
+        return Http::retry(
+            $config['retry_times'] ?? 3,
+            $config['retry_delay'] ?? 100
+        )
+        ->timeout($config['timeout'] ?? 10)
+        ->withHeaders([
+            'Authorization' => 'Bearer ' . $config['token'],
+            'Content-Type' => 'application/json',
+        ])
+        ->post($config['url'] . '/api/v4/posts', $postData);
     }
 }
