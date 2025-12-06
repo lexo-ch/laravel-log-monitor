@@ -29,6 +29,11 @@ LARAVEL_LOG_MONITOR_MATTERMOST_URL=https://your-mattermost-url.tld
 LARAVEL_LOG_MONITOR_MATTERMOST_TOKEN=your-mattermost-token
 LARAVEL_LOG_MONITOR_MATTERMOST_CHANNEL=mattermost-channel-id
 
+# Optional: Mattermost HTTP retry settings (defaults shown)
+LARAVEL_LOG_MONITOR_MATTERMOST_RETRY_TIMES=3
+LARAVEL_LOG_MONITOR_MATTERMOST_RETRY_DELAY=100
+LARAVEL_LOG_MONITOR_MATTERMOST_TIMEOUT=10
+
 # Email notification recipients (comma-separated)
 LARAVEL_LOG_MONITOR_EMAIL_RECIPIENTS=email1@website.tld,email2@website.tld
 ```
@@ -37,6 +42,7 @@ By default:
 
 Only the production environment is monitored.
 Email notifications serve as a backup if Mattermost notifications fail.
+Mattermost HTTP requests will retry 3 times with 100ms delay and 10 second timeout.
 
 To enable simultaneous Mattermost and email notifications, set in .env file:
 

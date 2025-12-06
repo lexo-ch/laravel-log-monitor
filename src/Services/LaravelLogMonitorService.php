@@ -118,11 +118,16 @@ class LaravelLogMonitorService
         }
 
         try {
-            $response = Http::withHeaders([
+            $response = Http::retry(
+                $mattermostConfig['retry_times'] ?? 3,
+                $mattermostConfig['retry_delay'] ?? 100
+            )
+            ->timeout($mattermostConfig['timeout'] ?? 10)
+            ->withHeaders([
                 'Authorization' => 'Bearer ' . $mattermostConfig['token'],
                 'Content-Type' => 'application/json',
             ])->post($mattermostConfig['url'] . '/api/v4/posts', $post_data);
-    
+
             if (!$response->successful()) {
                 throw new \Exception('Mattermost API returned: ' . $response->status() . ' ' . $response->body());
             }
