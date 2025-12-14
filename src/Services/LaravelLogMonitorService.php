@@ -336,7 +336,7 @@ class LaravelLogMonitorService
         return $postData;
     }
 
-    protected function sendMattermostPost(array $config, array $postData)
+    public function sendMattermostPost(array $config, array $postData)
     {
         return Http::retry(
             $config['retry_times'] ?? 3,
