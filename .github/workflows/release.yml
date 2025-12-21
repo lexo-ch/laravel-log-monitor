@@ -17,6 +17,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: latest
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: composer:v2
       - name: Cache Composer dependencies
         uses: actions/cache@v4
         with:
@@ -25,12 +30,7 @@ jobs:
           restore-keys: |
             composer-
       - name: Install Composer dependencies
-        uses: php-actions/composer@v6
-        with:
-          php_version: "8.3"
-          version: 2.x
-          dev: no
-          args: --no-dev --no-scripts
+        run: composer install --no-dev --no-scripts --no-interaction --prefer-dist
       - name: Install NPM dependencies
         run: npm ci
       - name: Zip files and make a release
