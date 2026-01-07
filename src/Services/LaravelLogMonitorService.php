@@ -37,6 +37,10 @@ class LaravelLogMonitorService
 
     public function handle(MessageLogged $event): void
     {
+        if (!$this->config['enabled']) {
+            return;
+        }
+
         if (!in_array(
             app()->environment(),
             $this->getArrayFromString($this->config['environments']))
@@ -336,7 +340,7 @@ class LaravelLogMonitorService
         return $postData;
     }
 
-    protected function sendMattermostPost(array $config, array $postData)
+    public function sendMattermostPost(array $config, array $postData)
     {
         return Http::retry(
             $config['retry_times'] ?? 3,

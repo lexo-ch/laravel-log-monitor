@@ -169,3 +169,28 @@ it('does not validate when service is disabled', function () {
 
     expect($service)->toBeInstanceOf(LaravelLogMonitorService::class);
 });
+
+it('does not send notifications when service is disabled', function () {
+    config([
+        'laravel-log-monitor.enabled' => false,
+        'laravel-log-monitor.environments' => 'testing',
+        'laravel-log-monitor.channels.mattermost.enabled' => true,
+        'laravel-log-monitor.channels.mattermost.url' => 'https://mattermost.example.com',
+        'laravel-log-monitor.channels.mattermost.token' => 'test-token',
+        'laravel-log-monitor.channels.mattermost.channel_id' => 'test-channel-id',
+        'laravel-log-monitor.channels.email.enabled' => true,
+        'laravel-log-monitor.channels.email.recipients' => 'test@example.com',
+    ]);
+
+    \Illuminate\Support\Facades\Event::fake();
+    \Illuminate\Support\Facades\Http::fake();
+    \Illuminate\Support\Facades\Mail::fake();
+
+    $event = new \Illuminate\Log\Events\MessageLogged('error', 'Test error message', []);
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle($event);
+
+    \Illuminate\Support\Facades\Event::assertNotDispatched(\LEXO\LaravelLogMonitor\Events\NotificationSending::class);
+    \Illuminate\Support\Facades\Http::assertNothingSent();
+    \Illuminate\Support\Facades\Mail::assertNothingSent();
+});
