@@ -24,6 +24,11 @@ class LaravelLogMonitorService
         'important'
     ];
 
+    /**
+     * Default maximum post character limit for Mattermost.
+     */
+    public const DEFAULT_MAX_POST_LENGTH = 16383;
+
     public function __construct()
     {
         $this->config = config('laravel-log-monitor');
@@ -342,6 +347,21 @@ class LaravelLogMonitorService
 
     public function sendMattermostPost(array $config, array $postData)
     {
+        $message = $postData['message'] ?? '';
+        $maxPostLength = $config['max_post_length'] ?? self::DEFAULT_MAX_POST_LENGTH;
+
+        if (mb_strlen($message) <= $maxPostLength) {
+            return $this->sendRawMattermostPost($config, $postData);
+        }
+
+        return $this->sendMattermostAsFile($config, $postData);
+    }
+
+    /**
+     * Send a raw post to Mattermost without any processing.
+     */
+    public function sendRawMattermostPost(array $config, array $postData)
+    {
         return Http::retry(
             $config['retry_times'] ?? 3,
             $config['retry_delay'] ?? 100
@@ -352,5 +372,114 @@ class LaravelLogMonitorService
             'Content-Type' => 'application/json',
         ])
         ->post($config['url'] . '/api/v4/posts', $postData);
+    }
+
+    /**
+     * Upload the message as a markdown file and send a summary post with the file attached.
+     */
+    protected function sendMattermostAsFile(array $config, array $postData)
+    {
+        $channelId = $postData['channel_id'];
+        $message = $postData['message'];
+        $filename = 'notification-' . now()->format('Y-m-d-His') . '.md';
+
+        $uploadResponse = $this->uploadMattermostFile($config, $channelId, $filename, $message);
+
+        if (!$uploadResponse->successful()) {
+            error_log('Failed to upload Mattermost file: ' . $uploadResponse->status() . ' ' . $uploadResponse->body());
+
+            // Fall back to truncated message
+            $maxPostLength = $config['max_post_length'] ?? self::DEFAULT_MAX_POST_LENGTH;
+            $postData['message'] = $this->truncateMattermostMessage($message, $maxPostLength);
+
+            return $this->sendRawMattermostPost($config, $postData);
+        }
+
+        $fileInfos = $uploadResponse->json('file_infos', []);
+
+        if (empty($fileInfos)) {
+            error_log('No file_infos returned from Mattermost upload');
+
+            $maxPostLength = $config['max_post_length'] ?? self::DEFAULT_MAX_POST_LENGTH;
+            $postData['message'] = $this->truncateMattermostMessage($message, $maxPostLength);
+
+            return $this->sendRawMattermostPost($config, $postData);
+        }
+
+        $fileId = $fileInfos[0]['id'];
+        $maxPostLength = $config['max_post_length'] ?? self::DEFAULT_MAX_POST_LENGTH;
+        $summaryMessage = $this->generateMattermostSummaryMessage($message, $maxPostLength);
+
+        $postDataWithFile = [
+            'channel_id' => $channelId,
+            'message' => $summaryMessage,
+            'file_ids' => [$fileId],
+        ];
+
+        if (isset($postData['metadata'])) {
+            $postDataWithFile['metadata'] = $postData['metadata'];
+        }
+
+        return $this->sendRawMattermostPost($config, $postDataWithFile);
+    }
+
+    /**
+     * Upload a file to Mattermost.
+     */
+    protected function uploadMattermostFile(array $config, string $channelId, string $filename, string $content)
+    {
+        return Http::retry(
+            $config['retry_times'] ?? 3,
+            $config['retry_delay'] ?? 100
+        )
+        ->timeout($config['file_upload_timeout'] ?? 30)
+        ->withHeaders([
+            'Authorization' => 'Bearer ' . $config['token'],
+        ])
+        ->attach('files', $content, $filename)
+        ->post($config['url'] . '/api/v4/files', [
+            'channel_id' => $channelId,
+        ]);
+    }
+
+    /**
+     * Generate a summary message when the full message is sent as a file.
+     */
+    protected function generateMattermostSummaryMessage(string $fullMessage, int $maxPostLength): string
+    {
+        $lines = explode("\n", $fullMessage);
+        $headerLines = [];
+
+        // Extract up to 5 non-empty lines for the preview
+        foreach ($lines as $line) {
+            if (count($headerLines) >= 5) {
+                break;
+            }
+
+            $trimmedLine = trim($line);
+
+            if ($trimmedLine !== '') {
+                $headerLines[] = $trimmedLine;
+            }
+        }
+
+        $preview = implode("\n", $headerLines);
+
+        if (mb_strlen($preview) > 500) {
+            $preview = mb_substr($preview, 0, 497) . '...';
+        }
+
+        return $preview . "\n\n---\n**Full content attached as file** (message exceeded " . number_format($maxPostLength) . ' character limit)';
+    }
+
+    /**
+     * Truncate a message to fit within the Mattermost character limit.
+     */
+    protected function truncateMattermostMessage(string $message, int $maxPostLength): string
+    {
+        $suffix = "\n\n---\n**Message truncated** (exceeded " . number_format($maxPostLength) . ' character limit)';
+        $maxLength = $maxPostLength - mb_strlen($suffix);
+
+        return mb_substr($message, 0, $maxLength) . $suffix;
     }
 }
