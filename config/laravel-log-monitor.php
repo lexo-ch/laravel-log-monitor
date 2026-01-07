@@ -12,6 +12,8 @@ return [
             'retry_times' => env('LARAVEL_LOG_MONITOR_MATTERMOST_RETRY_TIMES', 3),
             'retry_delay' => env('LARAVEL_LOG_MONITOR_MATTERMOST_RETRY_DELAY', 100),
             'timeout' => env('LARAVEL_LOG_MONITOR_MATTERMOST_TIMEOUT', 10),
+            'file_upload_timeout' => env('LARAVEL_LOG_MONITOR_MATTERMOST_FILE_UPLOAD_TIMEOUT', 30),
+            'max_post_length' => env('LARAVEL_LOG_MONITOR_MATTERMOST_MAX_POST_LENGTH', 16383),
 
             // Additional named channels for routing specific logs
             // Route logs by adding 'channel' => 'channel-name' in the llm context

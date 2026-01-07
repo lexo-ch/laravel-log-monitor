@@ -388,3 +388,431 @@ it('retries mattermost requests based on configuration', function () {
 
     Http::assertSentCount(3);
 });
+
+it('sends short messages directly without file upload', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        'max_post_length' => 1000,
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+    ];
+
+    Http::fake([
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $service = app(LaravelLogMonitorService::class);
+    $response = $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => 'Short message under limit'
+    ]);
+
+    expect($response->successful())->toBeTrue();
+    Http::assertSent(function ($request) {
+        return str_contains($request->url(), '/api/v4/posts');
+    });
+    Http::assertNotSent(function ($request) {
+        return str_contains($request->url(), '/api/v4/files');
+    });
+});
+
+it('uploads long messages as file and sends summary post', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        'max_post_length' => 50,
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+        'file_upload_timeout' => 30,
+    ];
+
+    Http::fake([
+        '*/api/v4/files' => Http::response([
+            'file_infos' => [['id' => 'file-123']]
+        ], 200),
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $service = app(LaravelLogMonitorService::class);
+    $response = $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => str_repeat('A', 100)
+    ]);
+
+    expect($response->successful())->toBeTrue();
+
+    // Should have called files endpoint for upload
+    Http::assertSent(function ($request) {
+        return str_contains($request->url(), '/api/v4/files');
+    });
+
+    // Should have sent post with file_ids
+    Http::assertSent(function ($request) {
+        if (!str_contains($request->url(), '/api/v4/posts')) {
+            return false;
+        }
+        $body = json_decode($request->body(), true);
+        return isset($body['file_ids']) && in_array('file-123', $body['file_ids']);
+    });
+});
+
+it('falls back to truncated message when file upload fails', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        'max_post_length' => 50,
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+        'file_upload_timeout' => 30,
+    ];
+
+    Http::fake([
+        '*/api/v4/files' => Http::response('Upload failed', 500),
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $service = app(LaravelLogMonitorService::class);
+    $response = $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => str_repeat('A', 100)
+    ]);
+
+    expect($response->successful())->toBeTrue();
+
+    // Should still send a post (truncated)
+    Http::assertSent(function ($request) {
+        if (!str_contains($request->url(), '/api/v4/posts')) {
+            return false;
+        }
+        $body = json_decode($request->body(), true);
+        return str_contains($body['message'], '**Message truncated**');
+    });
+});
+
+it('falls back to truncated message when file upload returns no file_infos', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        'max_post_length' => 50,
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+        'file_upload_timeout' => 30,
+    ];
+
+    Http::fake([
+        '*/api/v4/files' => Http::response(['file_infos' => []], 200),
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $service = app(LaravelLogMonitorService::class);
+    $response = $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => str_repeat('A', 100)
+    ]);
+
+    expect($response->successful())->toBeTrue();
+
+    Http::assertSent(function ($request) {
+        if (!str_contains($request->url(), '/api/v4/posts')) {
+            return false;
+        }
+        $body = json_decode($request->body(), true);
+        return str_contains($body['message'], '**Message truncated**');
+    });
+});
+
+it('preserves priority metadata when sending with file attachment', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        'max_post_length' => 50,
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+        'file_upload_timeout' => 30,
+    ];
+
+    Http::fake([
+        '*/api/v4/files' => Http::response([
+            'file_infos' => [['id' => 'file-123']]
+        ], 200),
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $service = app(LaravelLogMonitorService::class);
+    $response = $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => str_repeat('A', 100),
+        'metadata' => [
+            'priority' => ['priority' => 'urgent']
+        ]
+    ]);
+
+    expect($response->successful())->toBeTrue();
+
+    Http::assertSent(function ($request) {
+        if (!str_contains($request->url(), '/api/v4/posts')) {
+            return false;
+        }
+        $body = json_decode($request->body(), true);
+        return isset($body['file_ids'])
+            && isset($body['metadata']['priority']['priority'])
+            && $body['metadata']['priority']['priority'] === 'urgent';
+    });
+});
+
+it('uses configured max_post_length from config', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        'max_post_length' => 100,
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+    ];
+
+    Http::fake([
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $service = app(LaravelLogMonitorService::class);
+    // Message exactly at limit should not trigger file upload
+    $response = $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => str_repeat('A', 100)
+    ]);
+
+    expect($response->successful())->toBeTrue();
+
+    // Should only hit posts endpoint, not files
+    Http::assertSent(function ($request) {
+        return str_contains($request->url(), '/api/v4/posts');
+    });
+    Http::assertNotSent(function ($request) {
+        return str_contains($request->url(), '/api/v4/files');
+    });
+});
+
+it('uses default max_post_length when not configured', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        // max_post_length not set - should use default (16383)
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+    ];
+
+    Http::fake([
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $service = app(LaravelLogMonitorService::class);
+    $response = $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => 'Short message'
+    ]);
+
+    expect($response->successful())->toBeTrue();
+
+    // Short message should go through without file upload
+    Http::assertSentCount(1);
+    Http::assertSent(function ($request) {
+        return str_contains($request->url(), '/api/v4/posts');
+    });
+});
+
+it('includes summary with file attached notice in summary message', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        'max_post_length' => 50,
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+        'file_upload_timeout' => 30,
+    ];
+
+    Http::fake([
+        '*/api/v4/files' => Http::response([
+            'file_infos' => [['id' => 'file-123']]
+        ], 200),
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $service = app(LaravelLogMonitorService::class);
+    $response = $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => "Line 1\nLine 2\nLine 3\n" . str_repeat('A', 100)
+    ]);
+
+    Http::assertSent(function ($request) {
+        if (!str_contains($request->url(), '/api/v4/posts')) {
+            return false;
+        }
+        $body = json_decode($request->body(), true);
+        return str_contains($body['message'], '**Full content attached as file**')
+            && str_contains($body['message'], 'Line 1');
+    });
+});
+
+it('sends email only when mattermost is disabled', function () {
+    config([
+        'laravel-log-monitor.channels.mattermost.enabled' => false,
+        'laravel-log-monitor.channels.email.enabled' => true,
+        'laravel-log-monitor.channels.email.recipients' => 'test@example.com',
+        'laravel-log-monitor.channels.email.send_as_backup' => false,
+    ]);
+
+    Mail::fake();
+    Http::fake();
+    Event::fake();
+
+    $event = new MessageLogged('error', 'Test error', []);
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle($event);
+
+    Http::assertNothingSent();
+    Mail::assertSent(Notification::class, function ($mail) {
+        return $mail->hasTo('test@example.com');
+    });
+});
+
+it('does not send email when email is disabled', function () {
+    config([
+        'laravel-log-monitor.channels.email.enabled' => false,
+    ]);
+
+    Mail::fake();
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $event = new MessageLogged('error', 'Test error', []);
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle($event);
+
+    Mail::assertNothingSent();
+    Http::assertSentCount(1);
+});
+
+it('sends nothing when channel name in llm context does not exist', function () {
+    config([
+        'laravel-log-monitor.channels.mattermost.additional_channels' => [
+            'payments' => 'payment-channel-id'
+        ]
+    ]);
+
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+    Mail::fake();
+    Event::fake();
+
+    $event = new MessageLogged('error', 'Test error', [
+        'llm' => ['channel' => 'nonexistent-channel']
+    ]);
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle($event);
+
+    Http::assertNothingSent();
+    Event::assertNotDispatched(NotificationSending::class, function ($e) {
+        return $e->channel === 'mattermost';
+    });
+});
+
+it('truncates summary preview when it exceeds 500 characters', function () {
+    $config = [
+        'url' => 'https://mattermost.example.com',
+        'token' => 'test-token',
+        'max_post_length' => 50,
+        'retry_times' => 1,
+        'retry_delay' => 0,
+        'timeout' => 10,
+        'file_upload_timeout' => 30,
+    ];
+
+    Http::fake([
+        '*/api/v4/files' => Http::response([
+            'file_infos' => [['id' => 'file-123']]
+        ], 200),
+        '*/api/v4/posts' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    // Create a message where the first 5 lines exceed 500 chars
+    $longLine = str_repeat('X', 150);
+    $message = "{$longLine}\n{$longLine}\n{$longLine}\n{$longLine}\n{$longLine}\n" . str_repeat('A', 100);
+
+    $service = app(LaravelLogMonitorService::class);
+    $service->sendMattermostPost($config, [
+        'channel_id' => 'test-channel',
+        'message' => $message
+    ]);
+
+    Http::assertSent(function ($request) {
+        if (!str_contains($request->url(), '/api/v4/posts')) {
+            return false;
+        }
+        $body = json_decode($request->body(), true);
+        $summaryPart = explode("\n\n---\n", $body['message'])[0];
+        // Should be truncated to 500 chars (497 + '...')
+        return mb_strlen($summaryPart) === 500 && str_ends_with($summaryPart, '...');
+    });
+});
+
+it('sends to both default and additional channel when mixed array is specified', function () {
+    config([
+        'laravel-log-monitor.channels.mattermost.additional_channels' => [
+            'payments' => 'payment-channel-id'
+        ]
+    ]);
+
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $event = new MessageLogged('error', 'Test error', [
+        'llm' => ['channel' => ['default', 'payments']]
+    ]);
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle($event);
+
+    Http::assertSentCount(2);
+
+    $sentChannelIds = [];
+    Http::assertSent(function ($request) use (&$sentChannelIds) {
+        $body = json_decode($request->body(), true);
+        $sentChannelIds[] = $body['channel_id'];
+        return true;
+    });
+
+    expect($sentChannelIds)->toContain('test-channel-id');
+    expect($sentChannelIds)->toContain('payment-channel-id');
+});
+
+it('deduplicates channel ids when same channel is referenced multiple times', function () {
+    config([
+        'laravel-log-monitor.channels.mattermost.additional_channels' => [
+            'alias1' => 'same-channel-id',
+            'alias2' => 'same-channel-id'
+        ]
+    ]);
+
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+
+    $event = new MessageLogged('error', 'Test error', [
+        'llm' => ['channel' => ['alias1', 'alias2']]
+    ]);
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle($event);
+
+    // Should only send once due to deduplication
+    Http::assertSentCount(1);
+});
