@@ -21,7 +21,7 @@ Configure the package by adding these variables to your .env file:
 ```
 LARAVEL_LOG_MONITOR_ENABLED=true
 
-# Environments where monitoring is active (comma-separated)
+# Environments where monitoring is active (comma-separated; an array also works in a published config)
 LARAVEL_LOG_MONITOR_ENVIRONMENTS=production,local
 
 # Mattermost integration settings
@@ -34,7 +34,7 @@ LARAVEL_LOG_MONITOR_MATTERMOST_RETRY_TIMES=3
 LARAVEL_LOG_MONITOR_MATTERMOST_RETRY_DELAY=100
 LARAVEL_LOG_MONITOR_MATTERMOST_TIMEOUT=10
 
-# Email notification recipients (comma-separated)
+# Email notification recipients (comma-separated; an array also works in a published config)
 LARAVEL_LOG_MONITOR_EMAIL_RECIPIENTS=email1@website.tld,email2@website.tld
 ```
 
@@ -164,6 +164,7 @@ Log::emergency('Critical system failure', [
 - `'channel' => ['name1', 'name2']` - Routes to multiple channel names (each can resolve to multiple IDs)
 - `'channel' => 'default'` or in array `['critical', 'default']` - Uses the default `channel_id`
 - If `channel` not specified - Uses default `channel_id`
+- Unknown channel names are skipped; if none resolve, the default `channel_id` is used
 
 **Configuration:**
 - Each channel name can map to single ID (string) or multiple IDs (array)
@@ -173,7 +174,8 @@ Log::emergency('Critical system failure', [
 
 **Error Handling:**
 - Validation ensures all configured channels have valid channel IDs
-- Email backup is triggered only if sending fails to at least one channel
+- Email backup is triggered if sending fails to at least one channel, or if Mattermost is disabled
+- Invalid configuration disables notifications (reported via `error_log`) instead of throwing while logging
 - Each channel send fires individual events (NotificationSending/Sent/Failed)
 
 #### Example Use Cases

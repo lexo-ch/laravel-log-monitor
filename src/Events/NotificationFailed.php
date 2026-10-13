@@ -12,7 +12,7 @@ class NotificationFailed
     public function __construct(
         public MessageLogged $event,
         public string $channel,
-        public \Exception $exception
+        public \Throwable $exception
     ) {
     }
 }

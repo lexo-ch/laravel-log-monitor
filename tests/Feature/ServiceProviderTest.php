@@ -70,6 +70,28 @@ it('loads mattermost views from package directory', function () {
     expect($hints)->toHaveKey('laravel-log-monitor-mattermost-views');
 });
 
+it('renders multi-line mattermost messages in a code block', function () {
+    $output = view('laravel-log-monitor-mattermost-views::notification', [
+        'level' => 'error',
+        'message' => "Line 1\nLine 2",
+        'context' => [],
+    ])->render();
+
+    expect($output)->toContain("```\nLine 1\nLine 2\n```")
+        ->and($output)->not->toContain('| Message |');
+});
+
+it('renders mattermost context in a fence longer than any backtick run inside it', function () {
+    $output = view('laravel-log-monitor-mattermost-views::notification', [
+        'level' => 'error',
+        'message' => 'Test',
+        'context' => ['code' => 'a ``` b'],
+    ])->render();
+
+    expect($output)->toContain("````json\n")
+        ->and($output)->toContain('| Message | Test |');
+});
+
 it('has correct package name constant', function () {
     expect(\LEXO\LaravelLogMonitor\Providers\LaravelLogMonitorServiceProvider::PACKAGE_NAME)
         ->toBe('LEXO Laravel Log Monitor');

@@ -18,6 +18,12 @@ class LaravelLogMonitorService
     protected array $llmContext;
     protected array $filteredContext = [];
     protected ?string $priority = null;
+    protected ?string $configError = null;
+
+    /**
+     * Guards against re-entry when sending a notification itself writes a log entry.
+     */
+    protected static bool $handling = false;
 
     public const MATTERMOST_PRIORITY_VALUES = [
         'urgent',
@@ -36,25 +42,46 @@ class LaravelLogMonitorService
         if (!$this->config['enabled']) {
             return;
         }
-        
-        $this->validateConfig();
+
+        try {
+            $this->validateConfig();
+        } catch (\InvalidArgumentException $e) {
+            // Never throw from the logging pipeline, just disable notifications
+            $this->configError = $e->getMessage();
+
+            error_log('Laravel Log Monitor is misconfigured, notifications are disabled: ' . $e->getMessage());
+        }
     }
 
     public function handle(MessageLogged $event): void
     {
-        if (!$this->config['enabled']) {
+        if (!$this->config['enabled'] || $this->configError !== null || static::$handling) {
             return;
         }
 
+        static::$handling = true;
+
+        try {
+            $this->process($event);
+        } catch (\Throwable $e) {
+            error_log('Laravel Log Monitor failed to process log event: ' . $e->getMessage());
+        } finally {
+            static::$handling = false;
+        }
+    }
+
+    protected function process(MessageLogged $event): void
+    {
         if (!in_array(
             app()->environment(),
-            $this->getArrayFromString($this->config['environments']))
+            $this->toList($this->config['environments']))
         ) {
             return;
         }
 
         $this->context = $event->context ?? [];
-        $this->llmContext = $this->context['llm'] ?? [];
+        $this->llmContext = is_array($this->context['llm'] ?? null) ? $this->context['llm'] : [];
+        $this->priority = null;
 
         if (!$this->shouldMonitorEvent($event)) {
             return;
@@ -66,9 +93,9 @@ class LaravelLogMonitorService
 
         $this->filteredContext = $this->filterContext();
 
-        $this->sendToMattermost($event);
+        $deliveredToMattermost = $this->sendToMattermost($event);
 
-        if (!$this->config['channels']['email']['send_as_backup']) {
+        if (!$deliveredToMattermost || !$this->config['channels']['email']['send_as_backup']) {
             $this->sendEmailNotification($event);
         }
     }
@@ -81,7 +108,7 @@ class LaravelLogMonitorService
             return;
         }
 
-        $recipients = $this->getArrayFromString($emailConfig['recipients']);
+        $recipients = $this->toList($emailConfig['recipients']);
 
         if (empty($recipients)) {
             return;
@@ -99,7 +126,7 @@ class LaravelLogMonitorService
 
                 // Fire event after successful send
                 event(new NotificationSent($event, 'email', ['recipient' => $recipient]));
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 // Fire event on failure
                 event(new NotificationFailed($event, 'email', $e));
 
@@ -108,19 +135,22 @@ class LaravelLogMonitorService
         }
     }
 
-    protected function sendToMattermost(MessageLogged $event): void
+    /**
+     * Returns true only when the notification was delivered to every resolved channel.
+     */
+    protected function sendToMattermost(MessageLogged $event): bool
     {
         $mattermostConfig = $this->config['channels']['mattermost'];
 
         if (!$mattermostConfig['enabled']) {
-            return;
+            return false;
         }
 
         // Determine which channels to use (can be multiple)
         $channelIds = $this->resolveChannelId($mattermostConfig);
 
         if (empty($channelIds)) {
-            return;
+            return false;
         }
 
         $message = $this->getMattermostMessage($event);
@@ -142,7 +172,7 @@ class LaravelLogMonitorService
 
                 // Fire event after successful send
                 event(new NotificationSent($event, 'mattermost', $response));
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 $hasFailure = true;
 
                 // Fire event on failure
@@ -152,10 +182,7 @@ class LaravelLogMonitorService
             }
         }
 
-        // Trigger email backup if any channel failed
-        if ($hasFailure && $this->config['channels']['email']['send_as_backup']) {
-            $this->sendEmailNotification($event);
-        }
+        return !$hasFailure;
     }
 
     protected function getMattermostMessage(MessageLogged $event): string
@@ -167,16 +194,19 @@ class LaravelLogMonitorService
         ])->render();
     }
 
-    protected function getArrayFromString(string $string): array
+    /**
+     * Accepts a comma-separated string or an array and returns a clean list.
+     */
+    protected function toList(string|array|null $value): array
     {
-        return collect(explode(',', $string))
-            ->map(fn($item) => trim($item))
+        return collect(is_array($value) ? $value : explode(',', (string) $value))
+            ->map(fn($item) => trim((string) $item))
             ->filter()
             ->values()
             ->all();
     }
 
-    protected function validateConfig(): void
+    public function validateConfig(): void
     {
         if ($this->config['channels']['mattermost']['enabled']) {
             $this->validateMattermostConfig();
@@ -231,7 +261,7 @@ class LaravelLogMonitorService
             throw new \InvalidArgumentException('Email recipients are required when email notifications are enabled');
         }
 
-        foreach ($this->getArrayFromString($config['recipients']) as $email) {
+        foreach ($this->toList($config['recipients']) as $email) {
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                 throw new \InvalidArgumentException("Invalid email address: {$email}");
             }
@@ -265,18 +295,50 @@ class LaravelLogMonitorService
             unset($filteredContext['llm']);
         }
 
-        return $filteredContext;
+        return $this->normalizeContext($filteredContext);
+    }
+
+    /**
+     * Convert values that do not serialize to JSON (like exceptions) into readable arrays.
+     */
+    protected function normalizeContext(array $context): array
+    {
+        return array_map(function ($value) {
+            if ($value instanceof \Throwable) {
+                return $this->formatThrowable($value);
+            }
+
+            return is_array($value) ? $this->normalizeContext($value) : $value;
+        }, $context);
+    }
+
+    protected function formatThrowable(\Throwable $throwable): array
+    {
+        $formatted = [
+            'class' => get_class($throwable),
+            'message' => $throwable->getMessage(),
+            'code' => $throwable->getCode(),
+            'file' => $throwable->getFile() . ':' . $throwable->getLine(),
+            'trace' => explode("\n", $throwable->getTraceAsString()),
+        ];
+
+        if ($throwable->getPrevious() !== null) {
+            $formatted['previous'] = $this->formatThrowable($throwable->getPrevious());
+        }
+
+        return $formatted;
     }
 
     protected function resolveChannelId(array $mattermostConfig): array
     {
         // Check if a specific channel is requested via llm context
         $requestedChannels = $this->llmContext['channel'] ?? null;
+        $defaultChannel = $mattermostConfig['channel_id'] ?? null;
+        $defaultChannelIds = $defaultChannel ? [$defaultChannel] : [];
 
         if ($requestedChannels === null) {
             // No specific channel requested, use default
-            $defaultChannel = $mattermostConfig['channel_id'] ?? null;
-            return $defaultChannel ? [$defaultChannel] : [];
+            return $defaultChannelIds;
         }
 
         // Normalize to array (supports both string and array of channel names)
@@ -286,7 +348,6 @@ class LaravelLogMonitorService
         foreach ($channelNames as $channelName) {
             // Special case: 'default' keyword uses the default channel_id
             if ($channelName === 'default') {
-                $defaultChannel = $mattermostConfig['channel_id'] ?? null;
                 if ($defaultChannel) {
                     $resolvedChannelIds[] = $defaultChannel;
                 }
@@ -294,7 +355,7 @@ class LaravelLogMonitorService
             }
 
             // Look up in additional_channels
-            if (isset($mattermostConfig['additional_channels'][$channelName])) {
+            if (is_scalar($channelName) && isset($mattermostConfig['additional_channels'][$channelName])) {
                 $channelIds = $mattermostConfig['additional_channels'][$channelName];
 
                 // The value can be a string (single channel) or array (multiple channels)
@@ -303,7 +364,16 @@ class LaravelLogMonitorService
                 } else {
                     $resolvedChannelIds[] = $channelIds;
                 }
+
+                continue;
             }
+
+            error_log('Laravel Log Monitor: unknown Mattermost channel "' . (is_scalar($channelName) ? $channelName : gettype($channelName)) . '" requested');
+        }
+
+        // Never drop a notification, fall back to the default channel
+        if (empty($resolvedChannelIds)) {
+            return $defaultChannelIds;
         }
 
         // Remove duplicates and reindex

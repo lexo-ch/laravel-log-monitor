@@ -89,7 +89,7 @@
 
         @if(!empty($emailData['context']))
             <h3>Context Details</h3>
-            <div class="context">@json($emailData['context'])</div>
+            <div class="context">{{ json_encode($emailData['context'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR) }}</div>
         @endif
 
         <div class="footer">
