@@ -701,7 +701,7 @@ it('does not send email when email is disabled', function () {
     Http::assertSentCount(1);
 });
 
-it('sends nothing when channel name in llm context does not exist', function () {
+it('falls back to default channel when channel name in llm context does not exist', function () {
     config([
         'laravel-log-monitor.channels.mattermost.additional_channels' => [
             'payments' => 'payment-channel-id'
@@ -712,7 +712,6 @@ it('sends nothing when channel name in llm context does not exist', function () 
         '*' => Http::response(['id' => 'post-123'], 200)
     ]);
     Mail::fake();
-    Event::fake();
 
     $event = new MessageLogged('error', 'Test error', [
         'llm' => ['channel' => 'nonexistent-channel']
@@ -720,9 +719,143 @@ it('sends nothing when channel name in llm context does not exist', function () 
     $service = app(LaravelLogMonitorService::class);
     $service->handle($event);
 
+    Http::assertSentCount(1);
+    Http::assertSent(function ($request) {
+        return $request['channel_id'] === 'test-channel-id';
+    });
+});
+
+it('ignores unknown channel names when other channels resolve', function () {
+    config([
+        'laravel-log-monitor.channels.mattermost.additional_channels' => [
+            'payments' => 'payment-channel-id'
+        ]
+    ]);
+
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+    Mail::fake();
+
+    $event = new MessageLogged('error', 'Test error', [
+        'llm' => ['channel' => ['nonexistent-channel', 'payments']]
+    ]);
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle($event);
+
+    Http::assertSentCount(1);
+    Http::assertSent(function ($request) {
+        return $request['channel_id'] === 'payment-channel-id';
+    });
+});
+
+it('sends email when mattermost is disabled and send_as_backup is true', function () {
+    config([
+        'laravel-log-monitor.channels.mattermost.enabled' => false,
+        'laravel-log-monitor.channels.email.send_as_backup' => true,
+    ]);
+
+    Mail::fake();
+    Http::fake();
+
+    $event = new MessageLogged('error', 'Test error', []);
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle($event);
+
     Http::assertNothingSent();
-    Event::assertNotDispatched(NotificationSending::class, function ($e) {
-        return $e->channel === 'mattermost';
+    Mail::assertSent(Notification::class);
+});
+
+it('sends email when no mattermost channel resolves and send_as_backup is true', function () {
+    config([
+        'laravel-log-monitor.channels.mattermost.channel_id' => '',
+        'laravel-log-monitor.channels.email.send_as_backup' => true,
+    ]);
+
+    Mail::fake();
+    Http::fake();
+
+    $service = new LaravelLogMonitorService();
+    // Bypass the channel_id validation to reach the empty channel path
+    (fn () => $this->configError = null)->call($service);
+    $service->handle(new MessageLogged('error', 'Test error', []));
+
+    Http::assertNothingSent();
+    Mail::assertSent(Notification::class);
+});
+
+it('does not leak priority from a previous event', function () {
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+    Mail::fake();
+
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle(new MessageLogged('error', 'First', ['llm' => ['priority' => 'urgent']]));
+    $service->handle(new MessageLogged('error', 'Second', []));
+
+    $requests = Http::recorded();
+
+    expect($requests)->toHaveCount(2)
+        ->and($requests[0][0]['metadata']['priority']['priority'])->toBe('urgent')
+        ->and($requests[1][0]->data())->not->toHaveKey('metadata');
+});
+
+it('does not throw when sending fails with a non-exception error', function () {
+    Http::fake(function () {
+        throw new \TypeError('Unexpected type');
+    });
+    Mail::fake();
+    Event::fake();
+
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle(new MessageLogged('error', 'Test error', []));
+
+    Event::assertDispatched(NotificationFailed::class, function ($e) {
+        return $e->exception instanceof \TypeError;
+    });
+});
+
+it('does not handle log events written while sending a notification', function () {
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+    Mail::fake();
+
+    $handled = 0;
+
+    \Illuminate\Support\Facades\Event::listen(NotificationSending::class, function () use (&$handled) {
+        $handled++;
+        \Illuminate\Support\Facades\Log::error('Logged while sending');
+    });
+
+    \Illuminate\Support\Facades\Log::error('Original error');
+
+    // One Mattermost and one email notification, none for the nested log entry
+    expect($handled)->toBe(2);
+    Http::assertSentCount(1);
+});
+
+it('formats exceptions in context as readable data', function () {
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+    Mail::fake();
+
+    $exception = new \RuntimeException('Outer failure', 5, new \LogicException('Inner failure'));
+
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle(new MessageLogged('error', 'Test error', ['exception' => $exception, 'nested' => ['e' => $exception]]));
+
+    Mail::assertSent(Notification::class, function ($mail) {
+        $formatted = $mail->emailData['context']['exception'];
+
+        return $formatted['class'] === \RuntimeException::class
+            && $formatted['message'] === 'Outer failure'
+            && $formatted['code'] === 5
+            && is_array($formatted['trace'])
+            && $formatted['previous']['message'] === 'Inner failure'
+            && $mail->emailData['context']['nested']['e']['class'] === \RuntimeException::class;
     });
 });
 
@@ -815,4 +948,37 @@ it('deduplicates channel ids when same channel is referenced multiple times', fu
 
     // Should only send once due to deduplication
     Http::assertSentCount(1);
+});
+
+it('accepts environments as an array', function () {
+    config([
+        'laravel-log-monitor.environments' => ['production', 'testing'],
+    ]);
+
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+    Mail::fake();
+
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle(new MessageLogged('error', 'Test error', []));
+
+    Http::assertSentCount(1);
+});
+
+it('accepts email recipients as an array', function () {
+    config([
+        'laravel-log-monitor.channels.email.recipients' => ['first@example.com', ' second@example.com '],
+    ]);
+
+    Http::fake([
+        '*' => Http::response(['id' => 'post-123'], 200)
+    ]);
+    Mail::fake();
+
+    $service = app(LaravelLogMonitorService::class);
+    $service->handle(new MessageLogged('error', 'Test error', []));
+
+    Mail::assertSent(Notification::class, fn ($mail) => $mail->hasTo('first@example.com'));
+    Mail::assertSent(Notification::class, fn ($mail) => $mail->hasTo('second@example.com'));
 });
